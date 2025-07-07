@@ -23,6 +23,7 @@ class Track:
     finish_x: int
     finish_y: int
     points: List[Tuple[int, int]]
+    source_file: str = ""  # Which file this track came from
 
     def __post_init__(self):
         """Convert coordinates using the game's transformation"""
@@ -138,7 +139,7 @@ def save_tracks_csv(tracks: List[Track], output_file: str):
         writer = csv.writer(csvfile)
 
         # Header
-        writer.writerow(['name', 'level', 'track_id', 'start_x', 'start_y',
+        writer.writerow(['source_file', 'name', 'level', 'track_id', 'start_x', 'start_y',
                          'finish_x', 'finish_y', 'point_count', 'points_x', 'points_y'])
 
         for track in tracks:
@@ -146,6 +147,7 @@ def save_tracks_csv(tracks: List[Track], output_file: str):
             points_y = [str(p[1]) for p in track.points]
 
             writer.writerow([
+                track.source_file,
                 track.name,
                 track.level,
                 track.track_id,
@@ -165,6 +167,7 @@ def save_tracks_json(tracks: List[Track], output_file: str):
 
     for track in tracks:
         track_dict = {
+            'source_file': track.source_file,
             'name': track.name,
             'level': track.level,
             'track_id': track.track_id,
@@ -180,36 +183,127 @@ def save_tracks_json(tracks: List[Track], output_file: str):
         json.dump(track_data, jsonfile, indent=2, ensure_ascii=False)
 
 
+def parse_multiple_files(file_paths: List[str], output_prefix: str = "all_tracks"):
+    """Parse multiple MRG files and combine results"""
+    all_tracks = []
+    failed_files = []
+
+    print(f"Parsing {len(file_paths)} MRG files...")
+
+    for i, file_path in enumerate(file_paths, 1):
+        print(f"[{i}/{len(file_paths)}] Parsing {Path(file_path).name}...")
+
+        try:
+            parser = MRGParser(file_path)
+            tracks = parser.parse()
+
+            # Add file info to each track
+            file_name = Path(file_path).stem
+            for track in tracks:
+                track.source_file = file_name
+
+            all_tracks.extend(tracks)
+            print(f"  Found {len(tracks)} tracks")
+
+        except Exception as e:
+            print(f"  Failed to parse {file_path}: {e}")
+            failed_files.append(file_path)
+
+    print(f"\nTotal tracks parsed: {len(all_tracks)}")
+    if failed_files:
+        print(f"Failed files: {len(failed_files)}")
+        for failed in failed_files:
+            print(f"  {failed}")
+
+    # Save combined data
+    if all_tracks:
+        csv_file = f"{output_prefix}.csv"
+        save_tracks_csv(all_tracks, csv_file)
+        print(f"\nAll track data saved to {csv_file}")
+
+        json_file = f"{output_prefix}.json"
+        save_tracks_json(all_tracks, json_file)
+        print(f"All track data saved to {json_file}")
+
+    return all_tracks, failed_files
+
+
+def find_mrg_files(directory: str) -> List[str]:
+    """Find all MRG files in a directory"""
+    mrg_files = []
+    dir_path = Path(directory)
+
+    if dir_path.is_dir():
+        mrg_files = list(dir_path.glob("*.mrg"))
+        mrg_files = [str(f) for f in sorted(mrg_files)]
+
+    return mrg_files
+
+
 def main():
     """Main function"""
     import sys
+    import argparse
 
-    if len(sys.argv) != 2:
-        print("Usage: python mrg_parser.py <path_to_levels.mrg>")
+    parser = argparse.ArgumentParser(description='Parse Gravity Defied MRG files')
+    parser.add_argument('files', nargs='+', help='MRG files or directories to parse')
+    parser.add_argument('--output', '-o', default='all_tracks',
+                        help='Output file prefix (default: all_tracks)')
+    parser.add_argument('--recursive', '-r', action='store_true',
+                        help='Recursively search directories for MRG files')
+
+    # Fallback for simple usage
+    if len(sys.argv) == 2 and sys.argv[1].endswith('.mrg'):
+        # Single file mode (backward compatibility)
+        mrg_file = sys.argv[1]
+
+        parser_instance = MRGParser(mrg_file)
+        tracks = parser_instance.parse()
+
+        print(f"Parsed {len(tracks)} tracks from {mrg_file}")
+
+        # Print summary
+        for track in tracks:
+            print(f"  {track.name} (Level {track.level}, {len(track.points)} points)")
+
+        # Save raw data
+        base_name = Path(mrg_file).stem
+
+        csv_file = f"{base_name}_tracks.csv"
+        save_tracks_csv(tracks, csv_file)
+        print(f"\nTrack data saved to {csv_file}")
+
+        json_file = f"{base_name}_tracks.json"
+        save_tracks_json(tracks, json_file)
+        print(f"Track data saved to {json_file}")
         return
 
-    mrg_file = sys.argv[1]
+    # Multiple files/directories mode
+    args = parser.parse_args()
 
-    # Parse MRG file
-    parser = MRGParser(mrg_file)
-    tracks = parser.parse()
+    all_files = []
 
-    print(f"Parsed {len(tracks)} tracks from {mrg_file}")
+    for path in args.files:
+        path_obj = Path(path)
 
-    # Print summary
-    for track in tracks:
-        print(f"  {track.name} (Level {track.level}, {len(track.points)} points)")
+        if path_obj.is_file() and path.endswith('.mrg'):
+            all_files.append(path)
+        elif path_obj.is_dir():
+            if args.recursive:
+                mrg_files = list(path_obj.rglob("*.mrg"))
+            else:
+                mrg_files = list(path_obj.glob("*.mrg"))
 
-    # Save raw data
-    base_name = Path(mrg_file).stem
+            all_files.extend([str(f) for f in sorted(mrg_files)])
+        else:
+            print(f"Warning: {path} is not an MRG file or directory")
 
-    csv_file = f"{base_name}_tracks.csv"
-    save_tracks_csv(tracks, csv_file)
-    print(f"\nTrack data saved to {csv_file}")
+    if not all_files:
+        print("No MRG files found!")
+        return
 
-    json_file = f"{base_name}_tracks.json"
-    save_tracks_json(tracks, json_file)
-    print(f"Track data saved to {json_file}")
+    # Parse all files
+    parse_multiple_files(all_files, args.output)
 
 
 if __name__ == "__main__":
