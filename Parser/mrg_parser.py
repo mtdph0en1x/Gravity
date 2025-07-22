@@ -26,15 +26,15 @@ class Track:
     source_file: str = ""  # Which file this track came from
 
     def __post_init__(self):
-        """Convert coordinates using the game's transformation"""
-        # Apply coordinate transformation: (x << 16) >> 3
-        self.start_x = (self.start_x << 16) >> 3
-        self.start_y = (self.start_y << 16) >> 3
-        self.finish_x = (self.finish_x << 16) >> 3
-        self.finish_y = (self.finish_y << 16) >> 3
+        """Convert start/finish coordinates from file format to raw format"""
+        # Start/finish coordinates are stored as (value << 16) >> 3 in the file
+        # To reverse this: (stored_value << 3) >> 16
+        self.start_x = (self.start_x << 3) >> 16
+        self.start_y = (self.start_y << 3) >> 16
+        self.finish_x = (self.finish_x << 3) >> 16
+        self.finish_y = (self.finish_y << 3) >> 16
 
-        # Transform all points: (x << 3) >> 16
-        self.points = [((x << 3) >> 16, (y << 3) >> 16) for x, y in self.points]
+        # Points are already in the correct raw format
 
 
 class MRGParser:
@@ -98,31 +98,49 @@ class MRGParser:
             finish_y = struct.unpack('>i', f.read(4))[0]
             points_count = struct.unpack('>H', f.read(2))[0]  # Short
 
+            # Debug info
+            print(f"    Track: {name}, Points: {points_count}")
+
             # Read first point
             first_x = struct.unpack('>i', f.read(4))[0]
             first_y = struct.unpack('>i', f.read(4))[0]
 
+            # For now, let's skip the transformation and just use raw coordinates
+            # Apply unpackInt transformation to first point
+            # transformed_x = (first_x << 16) >> 3
+            # transformed_y = (first_y << 16) >> 3
             points = [(first_x, first_y)]
+
+            # Keep track of accumulated raw coordinates for offset calculation
             current_x = first_x
             current_y = first_y
+
+            # Debug first few points
+            debug_points = min(5, points_count - 1)
+            print(f"      First point: raw({first_x}, {first_y})")
 
             # Read remaining points
             for i in range(1, points_count):
                 x_offset = struct.unpack('b', f.read(1))[0]  # Signed byte
 
                 if x_offset == -1:
-                    # Reset coordinates and read full int coordinates
+                    # Special case: reset and read full coordinates
                     current_x = current_y = 0
                     x = struct.unpack('>i', f.read(4))[0]
                     y = struct.unpack('>i', f.read(4))[0]
+                    current_x = x
+                    current_y = y
+                    if i <= debug_points:
+                        print(f"      Point {i}: RESET to raw({x}, {y})")
                 else:
-                    # Read y offset and add to current position
+                    # Normal case: read y offset and add to current position
                     y_offset = struct.unpack('b', f.read(1))[0]  # Signed byte
-                    x = x_offset
-                    y = y_offset
+                    current_x += x_offset
+                    current_y += y_offset
+                    if i <= debug_points:
+                        print(f"      Point {i}: offset ({x_offset}, {y_offset}) -> raw({current_x}, {current_y})")
 
-                current_x += x
-                current_y += y
+                # Just use raw coordinates for now
                 points.append((current_x, current_y))
 
             return Track(name, level, track_id, start_x, start_y,
